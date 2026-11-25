@@ -1,113 +1,151 @@
-name: 'Build and Test'
+name: Java CI with Gradle
 
 on:
   push:
-    # Only on branches, not tags/releases
-    branches:
-      - '**'
+    branches: ["1.21.1"]
   pull_request:
-    branches:
-      - '*'
+    branches: ["1.21.1"]
 
-# Cancel outdated builds for the same branch
 concurrency:
   group: ci-build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    # Only run the pull-request build if the pull-request was opened from another repository,
-    # since we already run this workflow for the branch the pull request was made from.
+    # Only run the pull-request build if opened from another repository,
+    # since branch pushes already run this workflow.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
         with:
           fetch-depth: 50
-      - run: git fetch origin --tags
+
+      - name: Fetch Tags
+        run: git fetch origin --tags
         shell: bash
-      - uses: AppliedEnergistics/Applied-Energistics-2/.github/actions/gradle-setup@main
-      - name: Generate assets
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Make Gradle Wrapper Executable
+        run: chmod +x ./gradlew
+
+      - name: Generate Assets
+        if: github.event_name == 'push'
         run: ./gradlew runData
-      - name: Check that datagen ran
+
+      - name: Check That Datagen Ran
+        if: github.event_name == 'push'
         run: test -d ./src/generated/resources/.cache
-      - name: Make sure that generated files in the repo are up-to-date
+
+      - name: Make Sure Generated Files Are Up-to-Date
+        if: github.event_name == 'push'
         run: |
-          # Print status for easier debugging
           git status
           if [ -n "$(git status --porcelain)" ]; then exit 1; fi
 
-      - name: Build with Gradle
-        run: ./gradlew printProjectVersion build publish --max-workers 1
+      - uses: burrunan/gradle-cache-action@v3
+        name: Build and Stage Maven Repo
+        with:
+          job-id: jdk21
+          arguments: printProjectVersion build publish --max-workers 1
+          gradle-version: wrapper
+          concurrent: true
         env:
           ORG_GRADLE_PROJECT_signingKey: ${{ secrets.GPG_KEY }}
           ORG_GRADLE_PROJECT_signingPassword: ${{ secrets.GPG_KEY_PASSWORD }}
 
       - name: Run Game Tests
+        if: github.event_name == 'push'
         run: ./gradlew runGametest
-      - name: Upload new Source Text Strings to Crowdin
+
+      - name: Upload New Source Text Strings to Crowdin
+        if: github.event_name == 'push' && github.ref == 'refs/heads/1.21.1'
         run: ./gradlew uploadToCrowdin
         env:
           GIT_BRANCH: master
           CROWDIN_TOKEN: ${{ secrets.CROWDIN_TOKEN }}
         continue-on-error: true
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
 
-      # Always upload test results
       - name: Merge Test Reports
         if: success() || failure()
         run: npx junit-report-merger junit.xml "**/TEST-*.xml"
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload Test Results
+        uses: actions/upload-artifact@v4
         if: success() || failure()
         with:
           name: test-results
           path: junit.xml
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: build/libs/
-
-      - name: Prepare artifact metadata. Note that VERSION is set by the gradle script.
-        id: prepare_artifact_metadata
-        run: |
-          echo ARTIFACT_PATH=./build/libs/appliedenergistics2-${VERSION}.jar >> $GITHUB_OUTPUT
-          echo ARTIFACT_NAME=appliedenergistics2-${VERSION}.jar >> $GITHUB_OUTPUT
-          echo JAVADOC_PATH=./build/libs/appliedenergistics2-${VERSION}-javadoc.jar >> $GITHUB_OUTPUT
-          echo JAVADOC_NAME=appliedenergistics2-${VERSION}-javadoc.jar >> $GITHUB_OUTPUT
-          echo API_PATH=./build/libs/appliedenergistics2-${VERSION}-api.jar >> $GITHUB_OUTPUT
-          echo API_NAME=appliedenergistics2-${VERSION}-api.jar >> $GITHUB_OUTPUT
-          echo VERSION=${VERSION} >> $GITHUB_OUTPUT
-      - name: Archive build results
-        run: tar -I zstd -cf build.tar.zst build/libs build/repo
-      - name: Upload build and gradle folders
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-artifacts
-          path: build.tar.zst
-          if-no-files-found: error
-          retention-days: 3
-
-  publish:
-    name: Publish Snapshot to Maven Central
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    steps:
-      - name: Download build artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: build-artifacts
-      - name: Unpack build artifact
-        run: tar axf build.tar.zst
-      - name: Validate artifacts exist
-        run: test -d ./build
-      - name: Publish to Maven Central
+      # Publishes rolling -SNAPSHOT updates and every immutable release version from build/repo
+      - name: Publish to GitHub Packages
+        if: github.event_name == 'push' && github.ref == 'refs/heads/1.21.1'
         uses: AppliedEnergistics/maven-publish-action@main
         with:
           local-repository-path: build/repo
-          remote-repository-url: https://central.sonatype.com/repository/maven-snapshots/
-          remote-repository-username: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
-          remote-repository-password: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          remote-repository-url: https://maven.pkg.github.com/CreateTechified/Applied-Energistics-2-Project-Evo-Fork
+          remote-repository-username: ${{ github.actor }}
+          remote-repository-password: ${{ github.token }}
+
+      - name: Process Version and Rename Release Jars
+        id: mod_version
+        run: |
+          MC_VERSION="${GITHUB_REF_NAME}"
+          VERSION=$(grep '^mod_version=' gradle.properties | cut -d'=' -f2 | tr -d '[:space:]' || true)
+          if [ -z "$VERSION" ]; then
+            VERSION=$(./gradlew -q printProjectVersion | tail -n 1 | tr -d '[:space:]')
+          fi
+          SHORT_SHA=$(git rev-parse --short HEAD)
+
+          if [[ "$VERSION" == *-SNAPSHOT ]]; then
+            for file in build/libs/*.jar; do
+              if [ -f "$file" ]; then
+                base="${file%.jar}"
+                mv "$file" "${base}-${SHORT_SHA}.jar"
+              fi
+            done
+            echo "tag_name=latest-${MC_VERSION}" >> "$GITHUB_OUTPUT"
+            echo "release_name=${MC_VERSION}-${VERSION}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "make_latest=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag_name=${MC_VERSION}-${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "release_name=${MC_VERSION}-${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "make_latest=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Clean Existing Snapshot Release Assets
+        if: github.event_name == 'push' && github.ref == 'refs/heads/1.21.1' && startsWith(steps.mod_version.outputs.tag_name, 'latest-')
+        run: |
+          TAG="${{ steps.mod_version.outputs.tag_name }}"
+          ASSETS=$(gh release view "$TAG" --json assets -q '.assets[].name' 2>/dev/null || true)
+          for asset in $ASSETS; do
+            echo "Deleting asset: $asset"
+            gh release delete-asset "$TAG" "$asset" -y || true
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create or Update GitHub Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/1.21.1'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/libs/*.jar
+          tag_name: ${{ steps.mod_version.outputs.tag_name }}
+          name: ${{ steps.mod_version.outputs.release_name }}
+          draft: false
+          prerelease: ${{ steps.mod_version.outputs.prerelease }}
+          make_latest: ${{ steps.mod_version.outputs.make_latest }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
