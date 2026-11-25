@@ -18,7 +18,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      packages: write
 
     steps:
       - name: Checkout Repository
@@ -39,42 +38,9 @@ jobs:
       - name: Make Gradle Wrapper Executable
         run: chmod +x ./gradlew
 
-      - name: Resolve Version and Package Coordinates
-        id: resolve_coords
-        shell: bash
-        run: |
-          RAW_VERSION=$(grep '^mod_version=' gradle.properties | cut -d'=' -f2 | tr -d '[:space:]' || true)
-          if [ -z "$RAW_VERSION" ]; then
-            RAW_VERSION=$(./gradlew -q printProjectVersion | tail -n 1 | tr -d '[:space:]')
-          fi
-
-          # Check both mod_version and any tag on HEAD for "alpha" (case-insensitive)
-          LATEST_TAG=$(git tag --points-at HEAD | grep -i 'alpha' | head -n 1 || true)
-          LOWER_CHECK=$(printf '%s %s' "$RAW_VERSION" "$LATEST_TAG" | tr '[:upper:]' '[:lower:]')
-
-          PUB_GROUP="io.github.createtechified"
-
-          if [[ "$LOWER_CHECK" == *alpha* ]]; then
-            SOURCE_VER="${LATEST_TAG:-$RAW_VERSION}"
-            CLEAN_VER=$(printf '%s' "${SOURCE_VER%-SNAPSHOT}" | sed -E 's/^v//i')
-            FINAL_VERSION="${CLEAN_VER}-SNAPSHOT"
-            IS_SNAPSHOT="true"
-          else
-            FINAL_VERSION="$RAW_VERSION"
-            if [[ "$FINAL_VERSION" == *-SNAPSHOT ]]; then
-              IS_SNAPSHOT="true"
-            else
-              IS_SNAPSHOT="false"
-            fi
-          fi
-
-          echo "version=${FINAL_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "group=${PUB_GROUP}" >> "$GITHUB_OUTPUT"
-          echo "is_snapshot=${IS_SNAPSHOT}" >> "$GITHUB_OUTPUT"
-
       - name: Generate Assets
         if: github.event_name == 'push'
-        run: ./gradlew runData -Pversion="${{ steps.resolve_coords.outputs.version }}" -Pgroup="${{ steps.resolve_coords.outputs.group }}"
+        run: ./gradlew runData
 
       - name: Check That Datagen Ran
         if: github.event_name == 'push'
@@ -87,10 +53,10 @@ jobs:
           if [ -n "$(git status --porcelain)" ]; then exit 1; fi
 
       - uses: burrunan/gradle-cache-action@v3
-        name: Build and Stage Maven Repo
+        name: Build Project
         with:
           job-id: jdk21
-          arguments: printProjectVersion build publish --max-workers 1 -Pversion="${{ steps.resolve_coords.outputs.version }}" -Pgroup="${{ steps.resolve_coords.outputs.group }}"
+          arguments: printProjectVersion build --max-workers 1
           gradle-version: wrapper
           concurrent: true
         env:
@@ -99,7 +65,7 @@ jobs:
 
       - name: Run Game Tests
         if: github.event_name == 'push'
-        run: ./gradlew runGametest -Pversion="${{ steps.resolve_coords.outputs.version }}" -Pgroup="${{ steps.resolve_coords.outputs.group }}"
+        run: ./gradlew runGametest
 
       - name: Upload New Source Text Strings to Crowdin
         if: github.event_name == 'push' && github.ref == 'refs/heads/1.21.1'
@@ -120,64 +86,37 @@ jobs:
           name: test-results
           path: junit.xml
 
-      # Publishes rolling -SNAPSHOT updates and every immutable release version from build/repo
-      - name: Publish to GitHub Packages
+      - name: Resolve Release Info
+        id: release_info
         if: github.event_name == 'push' && github.ref == 'refs/heads/1.21.1'
-        uses: AppliedEnergistics/maven-publish-action@main
-        with:
-          local-repository-path: build/repo
-          remote-repository-url: https://maven.pkg.github.com/CreateTechified/Applied-Energistics-2-Project-Evo-Fork
-          remote-repository-username: ${{ github.actor }}
-          remote-repository-password: ${{ github.token }}
-
-      - name: Process Version and Rename Release Jars
-        id: mod_version
         shell: bash
         run: |
-          MC_VERSION="${GITHUB_REF_NAME}"
-          VERSION="${{ steps.resolve_coords.outputs.version }}"
-          SHORT_SHA=$(git rev-parse --short HEAD)
-
-          if [ "${{ steps.resolve_coords.outputs.is_snapshot }}" = "true" ]; then
-            for file in build/libs/*.jar; do
-              if [ -f "$file" ]; then
-                base="${file%.jar}"
-                mv "$file" "${base}-${SHORT_SHA}.jar"
-              fi
-            done
-            echo "tag_name=latest-${MC_VERSION}" >> "$GITHUB_OUTPUT"
-            echo "release_name=${MC_VERSION}-${VERSION}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
-            echo "make_latest=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag_name=${MC_VERSION}-${VERSION}" >> "$GITHUB_OUTPUT"
-            echo "release_name=${MC_VERSION}-${VERSION}" >> "$GITHUB_OUTPUT"
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
-            echo "make_latest=true" >> "$GITHUB_OUTPUT"
+          VERSION=$(grep '^mod_version=' gradle.properties | cut -d'=' -f2 | tr -d '[:space:]' || true)
+          if [ -z "$VERSION" ]; then
+            VERSION=$(./gradlew -q printProjectVersion | tail -n 1 | tr -d '[:space:]')
           fi
 
-      - name: Clean Existing Snapshot Release Assets
-        if: github.event_name == 'push' && github.ref == 'refs/heads/1.21.1' && startsWith(steps.mod_version.outputs.tag_name, 'latest-')
-        shell: bash
-        run: |
-          TAG="${{ steps.mod_version.outputs.tag_name }}"
-          ASSETS=$(gh release view "$TAG" --json assets -q '.assets[].name' 2>/dev/null || true)
-          for asset in $ASSETS; do
-            echo "Deleting asset: $asset"
-            gh release delete-asset "$TAG" "$asset" -y || true
-          done
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG=$(git tag --points-at HEAD | head -n 1 || true)
+          RELEASE_TAG="${TAG:-$VERSION}"
 
-      - name: Create or Update GitHub Release
+          LOWER_CHECK=$(printf '%s %s' "$VERSION" "$TAG" | tr '[:upper:]' '[:lower:]')
+          if [[ "$LOWER_CHECK" == *alpha* ]]; then
+            PRERELEASE="true"
+          else
+            PRERELEASE="false"
+          fi
+
+          echo "tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
         if: github.event_name == 'push' && github.ref == 'refs/heads/1.21.1'
         uses: softprops/action-gh-release@v2
         with:
           files: build/libs/*.jar
-          tag_name: ${{ steps.mod_version.outputs.tag_name }}
-          name: ${{ steps.mod_version.outputs.release_name }}
+          tag_name: ${{ steps.release_info.outputs.tag }}
+          name: ${{ steps.release_info.outputs.tag }}
           draft: false
-          prerelease: ${{ steps.mod_version.outputs.prerelease }}
-          make_latest: ${{ steps.mod_version.outputs.make_latest }}
+          prerelease: ${{ steps.release_info.outputs.prerelease }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
