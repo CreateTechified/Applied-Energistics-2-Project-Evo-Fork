@@ -38,6 +38,9 @@ jobs:
       - name: Make Gradle Wrapper Executable
         run: chmod +x ./gradlew
 
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Generate Assets
         if: github.event_name == 'push'
         run: ./gradlew runData
@@ -66,25 +69,6 @@ jobs:
       - name: Run Game Tests
         if: github.event_name == 'push'
         run: ./gradlew runGametest
-
-      - name: Upload New Source Text Strings to Crowdin
-        if: github.event_name == 'push' && github.ref == 'refs/heads/1.21.1'
-        run: ./gradlew uploadToCrowdin
-        env:
-          GIT_BRANCH: master
-          CROWDIN_TOKEN: ${{ secrets.CROWDIN_TOKEN }}
-        continue-on-error: true
-
-      - name: Merge Test Reports
-        if: success() || failure()
-        run: npx junit-report-merger junit.xml "**/TEST-*.xml"
-
-      - name: Upload Test Results
-        uses: actions/upload-artifact@v4
-        if: success() || failure()
-        with:
-          name: test-results
-          path: junit.xml
 
       - name: Resolve Release Info
         id: release_info
