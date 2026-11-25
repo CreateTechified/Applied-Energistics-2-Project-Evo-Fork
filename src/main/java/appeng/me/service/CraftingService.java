@@ -50,6 +50,8 @@ import appeng.api.networking.IGridNode;
 import appeng.api.networking.IGridServiceProvider;
 import appeng.api.networking.crafting.CalculationStrategy;
 import appeng.api.networking.crafting.ICraftingCPU;
+import appeng.api.networking.crafting.ICraftingCpuHost;
+import appeng.api.networking.crafting.ICraftingCpuProvider;
 import appeng.api.networking.crafting.ICraftingLink;
 import appeng.api.networking.crafting.ICraftingPlan;
 import appeng.api.networking.crafting.ICraftingProvider;
@@ -84,17 +86,17 @@ public class CraftingService implements ICraftingService, IGridServiceProvider {
      * Sorts Crafting CPUs by Co-Processors in descending order ("fast first"), and storage in ascending order (to
      * minimize the storage waste for jobs.).
      */
-    private static final Comparator<CraftingCPUCluster> FAST_FIRST_COMPARATOR = Comparator
-            .comparingInt(CraftingCPUCluster::getCoProcessors)
+    private static final Comparator<ICraftingCpuHost> FAST_FIRST_COMPARATOR = Comparator
+            .comparingInt(ICraftingCpuHost::getCoProcessors)
             .reversed()
-            .thenComparingLong(CraftingCPUCluster::getAvailableStorage);
+            .thenComparingLong(ICraftingCpuHost::getAvailableStorage);
     /**
      * Sorts Crafting CPUs by Co-Processors in ascending order ("fast last"), and storage in ascending order (to
      * minimize the storage waste for jobs.).
      */
-    private static final Comparator<CraftingCPUCluster> FAST_LAST_COMPARATOR = Comparator
-            .comparingInt(CraftingCPUCluster::getCoProcessors)
-            .thenComparingLong(CraftingCPUCluster::getAvailableStorage);
+    private static final Comparator<ICraftingCpuHost> FAST_LAST_COMPARATOR = Comparator
+            .comparingInt(ICraftingCpuHost::getCoProcessors)
+            .thenComparingLong(ICraftingCpuHost::getAvailableStorage);
 
     private static final ExecutorService CRAFTING_POOL;
 
@@ -113,7 +115,7 @@ public class CraftingService implements ICraftingService, IGridServiceProvider {
                 });
     }
 
-    private final Set<CraftingCPUCluster> craftingCPUClusters = new HashSet<>();
+    private final Set<ICraftingCpuHost> craftingCPUClusters = new HashSet<>();
     private final Map<IGridNode, StackWatcher<ICraftingWatcherNode>> craftingWatchers = new HashMap<>();
     private final IGrid grid;
     private final NetworkCraftingProviders craftingProviders = new NetworkCraftingProviders();
@@ -149,10 +151,10 @@ public class CraftingService implements ICraftingService, IGridServiceProvider {
 
         long latestChange = 0;
         for (var cpu : this.craftingCPUClusters) {
-            cpu.craftingLogic.tickCraftingLogic(energyGrid, this);
+            cpu.getCraftingLogic().tickCraftingLogic(energyGrid, this);
             latestChange = Math.max(
                     latestChange,
-                    cpu.craftingLogic.getLastModifiedOnTick());
+                    cpu.getCraftingLogic().getLastModifiedOnTick());
         }
 
         // There's nothing to do if we weren't crafting anything and we don't have any CPUs that could craft
@@ -163,7 +165,7 @@ public class CraftingService implements ICraftingService, IGridServiceProvider {
             this.currentlyCrafting.clear();
 
             for (var cpu : this.craftingCPUClusters) {
-                cpu.craftingLogic.getAllWaitingFor(this.currentlyCrafting);
+                cpu.getCraftingLogic().getAllWaitingFor(this.currentlyCrafting);
             }
 
             // Notify watchers about items no longer being crafted, but only if there can be changes and there are
@@ -233,7 +235,7 @@ public class CraftingService implements ICraftingService, IGridServiceProvider {
 
         this.craftingProviders.removeProvider(gridNode);
 
-        if (gridNode.getOwner() instanceof CraftingBlockEntity) {
+        if (gridNode.getOwner() instanceof CraftingBlockEntity || gridNode.getOwner() instanceof ICraftingCpuProvider) {
             this.updateList = true;
         }
     }
@@ -262,7 +264,7 @@ public class CraftingService implements ICraftingService, IGridServiceProvider {
             }
         }
 
-        if (gridNode.getOwner() instanceof CraftingBlockEntity) {
+        if (gridNode.getOwner() instanceof CraftingBlockEntity || gridNode.getOwner() instanceof ICraftingCpuProvider) {
             this.updateList = true;
         }
     }
@@ -280,9 +282,22 @@ public class CraftingService implements ICraftingService, IGridServiceProvider {
             if (cluster != null) {
                 this.craftingCPUClusters.add(cluster);
 
-                ICraftingLink maybeLink = cluster.craftingLogic.getLastLink();
+                ICraftingLink maybeLink = cluster.getCraftingLogic().getLastLink();
                 if (maybeLink != null) {
                     this.addLink((CraftingLink) maybeLink);
+                }
+            }
+        }
+
+        for (var provider : this.grid.getMachines(ICraftingCpuProvider.class)) {
+            for (var cpu : provider.getExposedCpus()) {
+                if (cpu instanceof ICraftingCpuHost host) {
+                    this.craftingCPUClusters.add(host);
+
+                    ICraftingLink maybeLink = host.getCraftingLogic().getLastLink();
+                    if (maybeLink != null) {
+                        this.addLink((CraftingLink) maybeLink);
+                    }
                 }
             }
         }
@@ -304,7 +319,7 @@ public class CraftingService implements ICraftingService, IGridServiceProvider {
     public long insertIntoCpus(AEKey what, long amount, Actionable type) {
         long inserted = 0;
         for (var cpu : this.craftingCPUClusters) {
-            inserted += cpu.craftingLogic.insert(what, amount - inserted, type);
+            inserted += cpu.getCraftingLogic().insert(what, amount - inserted, type);
         }
 
         return inserted;
@@ -363,14 +378,14 @@ public class CraftingService implements ICraftingService, IGridServiceProvider {
             return CraftingSubmitResult.INCOMPLETE_PLAN;
         }
 
-        CraftingCPUCluster cpuCluster;
+        ICraftingCpuHost cpuHost;
 
-        if (target instanceof CraftingCPUCluster) {
-            cpuCluster = (CraftingCPUCluster) target;
+        if (target instanceof ICraftingCpuHost) {
+            cpuHost = (ICraftingCpuHost) target;
         } else {
             var unsuitableCpusResult = new MutableObject<UnsuitableCpus>();
-            cpuCluster = findSuitableCraftingCPU(job, prioritizePower, src, unsuitableCpusResult);
-            if (cpuCluster == null) {
+            cpuHost = findSuitableCraftingCPU(job, prioritizePower, src, unsuitableCpusResult);
+            if (cpuHost == null) {
                 var unsuitableCpus = unsuitableCpusResult.getValue();
                 // If no CPUs were unsuitable, but we couldn't find one, that means there aren't any
                 if (unsuitableCpus == null) {
@@ -381,13 +396,13 @@ public class CraftingService implements ICraftingService, IGridServiceProvider {
             }
         }
 
-        return cpuCluster.submitJob(this.grid, job, src, requestingMachine);
+        return cpuHost.getCraftingLogic().trySubmitJob(this.grid, job, src, requestingMachine);
     }
 
     @Nullable
-    private CraftingCPUCluster findSuitableCraftingCPU(ICraftingPlan job, boolean prioritizePower, IActionSource src,
+    private ICraftingCpuHost findSuitableCraftingCPU(ICraftingPlan job, boolean prioritizePower, IActionSource src,
             MutableObject<UnsuitableCpus> unsuitableCpus) {
-        var validCpusClusters = new ArrayList<CraftingCPUCluster>(this.craftingCPUClusters.size());
+        var validCpusClusters = new ArrayList<ICraftingCpuHost>(this.craftingCPUClusters.size());
         int offline = 0;
         int busy = 0;
         int tooSmall = 0;
@@ -441,7 +456,7 @@ public class CraftingService implements ICraftingService, IGridServiceProvider {
     @Override
     public ImmutableSet<ICraftingCPU> getCpus() {
         var cpus = ImmutableSet.<ICraftingCPU>builder();
-        for (CraftingCPUCluster cpu : this.craftingCPUClusters) {
+        for (ICraftingCpuHost cpu : this.craftingCPUClusters) {
             if (cpu.isActive() && !cpu.isDestroyed()) {
                 cpus.add(cpu);
             }
@@ -463,8 +478,8 @@ public class CraftingService implements ICraftingService, IGridServiceProvider {
     public long getRequestedAmount(AEKey what) {
         long requested = 0;
 
-        for (CraftingCPUCluster cluster : this.craftingCPUClusters) {
-            requested += cluster.craftingLogic.getWaitingFor(what);
+        for (ICraftingCpuHost cluster : this.craftingCPUClusters) {
+            requested += cluster.getCraftingLogic().getWaitingFor(what);
         }
 
         return requested;

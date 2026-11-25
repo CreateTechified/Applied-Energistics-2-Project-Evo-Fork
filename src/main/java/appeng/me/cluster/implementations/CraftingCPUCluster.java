@@ -37,7 +37,7 @@ import appeng.api.config.Settings;
 import appeng.api.networking.IGrid;
 import appeng.api.networking.IGridNode;
 import appeng.api.networking.crafting.CraftingJobStatus;
-import appeng.api.networking.crafting.ICraftingCPU;
+import appeng.api.networking.crafting.ICraftingCpuHost;
 import appeng.api.networking.crafting.ICraftingPlan;
 import appeng.api.networking.crafting.ICraftingRequester;
 import appeng.api.networking.crafting.ICraftingSubmitResult;
@@ -53,7 +53,7 @@ import appeng.me.cluster.IAECluster;
 import appeng.me.cluster.MBCalculator;
 import appeng.me.helpers.MachineSource;
 
-public final class CraftingCPUCluster implements IAECluster, ICraftingCPU {
+public final class CraftingCPUCluster implements IAECluster, ICraftingCpuHost {
 
     private static final String LOG_MARK_AS_COMPLETE = "Completed job for %s.";
 
@@ -242,6 +242,11 @@ public final class CraftingCPUCluster implements IAECluster, ICraftingCPU {
     @Override
     public int getCoProcessors() {
         return this.accelerator;
+    }
+
+    @Override
+    public CraftingCpuLogic getCraftingLogic() {
+        return this.craftingLogic;
     }
 
     @Override
