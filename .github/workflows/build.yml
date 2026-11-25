@@ -39,9 +39,42 @@ jobs:
       - name: Make Gradle Wrapper Executable
         run: chmod +x ./gradlew
 
+      - name: Resolve Version and Package Coordinates
+        id: resolve_coords
+        shell: bash
+        run: |
+          RAW_VERSION=$(grep '^mod_version=' gradle.properties | cut -d'=' -f2 | tr -d '[:space:]' || true)
+          if [ -z "$RAW_VERSION" ]; then
+            RAW_VERSION=$(./gradlew -q printProjectVersion | tail -n 1 | tr -d '[:space:]')
+          fi
+
+          # Check both mod_version and any tag on HEAD for "alpha" (case-insensitive)
+          LATEST_TAG=$(git tag --points-at HEAD | grep -i 'alpha' | head -n 1 || true)
+          LOWER_CHECK=$(printf '%s %s' "$RAW_VERSION" "$LATEST_TAG" | tr '[:upper:]' '[:lower:]')
+
+          PUB_GROUP="io.github.createtechified"
+
+          if [[ "$LOWER_CHECK" == *alpha* ]]; then
+            SOURCE_VER="${LATEST_TAG:-$RAW_VERSION}"
+            CLEAN_VER=$(printf '%s' "${SOURCE_VER%-SNAPSHOT}" | sed -E 's/^v//i')
+            FINAL_VERSION="${CLEAN_VER}-SNAPSHOT"
+            IS_SNAPSHOT="true"
+          else
+            FINAL_VERSION="$RAW_VERSION"
+            if [[ "$FINAL_VERSION" == *-SNAPSHOT ]]; then
+              IS_SNAPSHOT="true"
+            else
+              IS_SNAPSHOT="false"
+            fi
+          fi
+
+          echo "version=${FINAL_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "group=${PUB_GROUP}" >> "$GITHUB_OUTPUT"
+          echo "is_snapshot=${IS_SNAPSHOT}" >> "$GITHUB_OUTPUT"
+
       - name: Generate Assets
         if: github.event_name == 'push'
-        run: ./gradlew runData
+        run: ./gradlew runData -Pversion="${{ steps.resolve_coords.outputs.version }}" -Pgroup="${{ steps.resolve_coords.outputs.group }}"
 
       - name: Check That Datagen Ran
         if: github.event_name == 'push'
@@ -57,7 +90,7 @@ jobs:
         name: Build and Stage Maven Repo
         with:
           job-id: jdk21
-          arguments: printProjectVersion build publish --max-workers 1
+          arguments: printProjectVersion build publish --max-workers 1 -Pversion="${{ steps.resolve_coords.outputs.version }}" -Pgroup="${{ steps.resolve_coords.outputs.group }}"
           gradle-version: wrapper
           concurrent: true
         env:
@@ -66,7 +99,7 @@ jobs:
 
       - name: Run Game Tests
         if: github.event_name == 'push'
-        run: ./gradlew runGametest
+        run: ./gradlew runGametest -Pversion="${{ steps.resolve_coords.outputs.version }}" -Pgroup="${{ steps.resolve_coords.outputs.group }}"
 
       - name: Upload New Source Text Strings to Crowdin
         if: github.event_name == 'push' && github.ref == 'refs/heads/1.21.1'
@@ -99,15 +132,13 @@ jobs:
 
       - name: Process Version and Rename Release Jars
         id: mod_version
+        shell: bash
         run: |
           MC_VERSION="${GITHUB_REF_NAME}"
-          VERSION=$(grep '^mod_version=' gradle.properties | cut -d'=' -f2 | tr -d '[:space:]' || true)
-          if [ -z "$VERSION" ]; then
-            VERSION=$(./gradlew -q printProjectVersion | tail -n 1 | tr -d '[:space:]')
-          fi
+          VERSION="${{ steps.resolve_coords.outputs.version }}"
           SHORT_SHA=$(git rev-parse --short HEAD)
 
-          if [[ "$VERSION" == *-SNAPSHOT ]]; then
+          if [ "${{ steps.resolve_coords.outputs.is_snapshot }}" = "true" ]; then
             for file in build/libs/*.jar; do
               if [ -f "$file" ]; then
                 base="${file%.jar}"
@@ -127,6 +158,7 @@ jobs:
 
       - name: Clean Existing Snapshot Release Assets
         if: github.event_name == 'push' && github.ref == 'refs/heads/1.21.1' && startsWith(steps.mod_version.outputs.tag_name, 'latest-')
+        shell: bash
         run: |
           TAG="${{ steps.mod_version.outputs.tag_name }}"
           ASSETS=$(gh release view "$TAG" --json assets -q '.assets[].name' 2>/dev/null || true)
