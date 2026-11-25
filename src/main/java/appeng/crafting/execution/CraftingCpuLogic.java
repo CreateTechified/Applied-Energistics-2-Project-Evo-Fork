@@ -35,6 +35,7 @@ import appeng.api.config.Actionable;
 import appeng.api.config.PowerMultiplier;
 import appeng.api.features.IPlayerRegistry;
 import appeng.api.networking.IGrid;
+import appeng.api.networking.crafting.ICraftingCpuHost;
 import appeng.api.networking.crafting.ICraftingLink;
 import appeng.api.networking.crafting.ICraftingPlan;
 import appeng.api.networking.crafting.ICraftingRequester;
@@ -50,14 +51,13 @@ import appeng.core.network.clientbound.CraftingJobStatusPacket;
 import appeng.crafting.CraftingLink;
 import appeng.crafting.inv.ListCraftingInventory;
 import appeng.hooks.ticking.TickHandler;
-import appeng.me.cluster.implementations.CraftingCPUCluster;
 import appeng.me.service.CraftingService;
 
 /**
  * Stores the crafting logic of a crafting CPU.
  */
 public class CraftingCpuLogic {
-    final CraftingCPUCluster cluster;
+    final ICraftingCpuHost host;
     /**
      * Current job.
      */
@@ -78,8 +78,12 @@ public class CraftingCpuLogic {
 
     private long lastModifiedOnTick = TickHandler.instance().getCurrentTick();
 
-    public CraftingCpuLogic(CraftingCPUCluster cluster) {
-        this.cluster = cluster;
+    public CraftingCpuLogic(ICraftingCpuHost host) {
+        this.host = host;
+    }
+
+    public ICraftingCpuHost getHost() {
+        return this.host;
     }
 
     public ICraftingSubmitResult trySubmitJob(IGrid grid, ICraftingPlan plan, IActionSource src,
@@ -88,10 +92,10 @@ public class CraftingCpuLogic {
         if (this.job != null)
             return CraftingSubmitResult.CPU_BUSY;
         // Check that the node is active.
-        if (!cluster.isActive())
+        if (!host.isActive())
             return CraftingSubmitResult.CPU_OFFLINE;
         // Check bytes.
-        if (cluster.getAvailableStorage() < plan.bytes())
+        if (host.getAvailableStorage() < plan.bytes())
             return CraftingSubmitResult.CPU_TOO_SMALL;
 
         if (!inventory.list.isEmpty())
@@ -107,10 +111,10 @@ public class CraftingCpuLogic {
                 .map(p -> p instanceof ServerPlayer serverPlayer ? IPlayerRegistry.getPlayerId(serverPlayer) : null)
                 .orElse(null);
         var craftId = UUID.randomUUID();
-        var linkCpu = new CraftingLink(CraftingCpuHelper.generateLinkData(craftId, requester == null, false), cluster);
+        var linkCpu = new CraftingLink(CraftingCpuHelper.generateLinkData(craftId, requester == null, false), host);
         this.job = new ExecutingCraftingJob(plan, this::postChange, linkCpu, playerId);
-        cluster.updateOutput(plan.finalOutput());
-        cluster.markDirty();
+        host.updateOutput(plan.finalOutput());
+        host.markDirty();
 
         // TODO: post monitor difference?
 
@@ -132,7 +136,7 @@ public class CraftingCpuLogic {
 
     public void tickCraftingLogic(IEnergyService eg, CraftingService cc) {
         // Don't tick if we're not active.
-        if (!cluster.isActive())
+        if (!host.isActive())
             return;
         cantStoreItems = false;
         // If we don't have a job, just try to dump our items.
@@ -154,12 +158,12 @@ public class CraftingCpuLogic {
             return;
         }
 
-        var remainingOperations = cluster.getCoProcessors() + 1 - (this.usedOps[0] + this.usedOps[1] + this.usedOps[2]);
+        var remainingOperations = host.getCoProcessors() + 1 - (this.usedOps[0] + this.usedOps[1] + this.usedOps[2]);
         final var started = remainingOperations;
 
         if (remainingOperations > 0) {
             do {
-                var pushedPatterns = executeCrafting(remainingOperations, cc, eg, cluster.getLevel());
+                var pushedPatterns = executeCrafting(remainingOperations, cc, eg, host.getLevel());
 
                 if (pushedPatterns > 0) {
                     remainingOperations -= pushedPatterns;
@@ -230,7 +234,7 @@ public class CraftingCpuLogic {
                                 expectedContainerItem.getKey().getType());
                     }
 
-                    cluster.markDirty();
+                    host.markDirty();
 
                     task.getValue().value--;
                     if (task.getValue().value <= 0) {
@@ -284,7 +288,7 @@ public class CraftingCpuLogic {
         if (type == Actionable.MODULATE) {
             job.timeTracker.decrementItems(amount, what.getType()); // Process Fluid and Items
             job.waitingFor.extract(what, amount, Actionable.MODULATE);
-            cluster.markDirty();
+            host.markDirty();
         }
 
         long inserted = amount;
@@ -309,9 +313,9 @@ public class CraftingCpuLogic {
 
                 if (job.remainingAmount <= 0) {
                     finishJob(true);
-                    cluster.updateOutput(null);
+                    host.updateOutput(null);
                 } else {
-                    cluster.updateOutput(new GenericStack(job.finalOutput.what(), job.remainingAmount));
+                    host.updateOutput(new GenericStack(job.finalOutput.what(), job.remainingAmount));
                 }
             }
         } else {
@@ -365,7 +369,7 @@ public class CraftingCpuLogic {
             return;
 
         // Clear displayed stack.
-        cluster.updateOutput(null);
+        host.updateOutput(null);
 
         finishJob(false);
     }
@@ -379,7 +383,7 @@ public class CraftingCpuLogic {
         if (this.inventory.list.isEmpty())
             return;
 
-        var g = cluster.getGrid();
+        var g = host.getGrid();
         if (g == null)
             return;
 
@@ -388,14 +392,14 @@ public class CraftingCpuLogic {
         for (var entry : this.inventory.list) {
             this.postChange(entry.getKey());
             var inserted = storage.insert(entry.getKey(), entry.getLongValue(),
-                    Actionable.MODULATE, cluster.getSrc());
+                    Actionable.MODULATE, host.getSrc());
 
             // The network was unable to receive all of the items, i.e. no or not enough storage space left
             entry.setValue(entry.getLongValue() - inserted);
         }
         this.inventory.list.removeZeros();
 
-        cluster.markDirty();
+        host.markDirty();
     }
 
     private void postChange(AEKey what) {
@@ -433,10 +437,10 @@ public class CraftingCpuLogic {
             if (this.job.finalOutput == null) {
                 finishJob(false);
             } else {
-                cluster.updateOutput(new GenericStack(job.finalOutput.what(), job.remainingAmount));
+                host.updateOutput(new GenericStack(job.finalOutput.what(), job.remainingAmount));
             }
         } else {
-            cluster.updateOutput(null);
+            host.updateOutput(null);
         }
     }
 
@@ -540,7 +544,7 @@ public class CraftingCpuLogic {
             return;
         }
 
-        var server = cluster.getLevel().getServer();
+        var server = host.getLevel().getServer();
         var connectedPlayer = IPlayerRegistry.getConnected(server, playerId);
         if (connectedPlayer != null) {
             var jobId = job.link.getCraftingID();

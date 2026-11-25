@@ -92,8 +92,8 @@ public class ExecutingCraftingJob {
 
     ExecutingCraftingJob(CompoundTag data, HolderLookup.Provider registries,
             CraftingDifferenceListener postCraftingDifference, CraftingCpuLogic cpu) {
-        this.link = new CraftingLink(data.getCompound(NBT_LINK), cpu.cluster);
-        IGrid grid = cpu.cluster.getGrid();
+        this.link = new CraftingLink(data.getCompound(NBT_LINK), cpu.getHost());
+        IGrid grid = cpu.getHost().getGrid();
         if (grid != null) {
             ((CraftingService) grid.getCraftingService()).addLink(link);
         }
@@ -113,7 +113,7 @@ public class ExecutingCraftingJob {
         for (int i = 0; i < tasksTag.size(); ++i) {
             final CompoundTag item = tasksTag.getCompound(i);
             var pattern = AEItemKey.fromTag(registries, item);
-            var details = PatternDetailsHelper.decodePattern(pattern, cpu.cluster.getLevel());
+            var details = PatternDetailsHelper.decodePattern(pattern, cpu.getHost().getLevel());
             if (details != null) {
                 final TaskProgress tp = new TaskProgress();
                 tp.value = item.getLong(NBT_CRAFTING_PROGRESS);
