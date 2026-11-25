@@ -2,14 +2,14 @@ modLoader="javafml"
 loaderVersion="[1,)"
 logoFile="logo.png"
 license="See GitHub repository for details"
-issueTrackerURL="https://github.com/AppliedEnergistics/Applied-Energistics-2/issues"
+issueTrackerURL="https://github.com/CreateTechified/Applied-Energistics-2-Project-Evo-Fork/issues"
 
 [[mods]]
 modId="ae2"
 version="${version}"
-displayName="Applied Energistics 2"
+displayName="AE2 ProjectEvo"
 description="A Mod about Matter, Energy and using them to conquer the world..."
-authors="Team AppliedEnergistics"
+authors="Team AppliedEnergistics, wrldmap, pineapple"
 displayURL="https://appliedenergistics.org"
 
 [[mixins]]

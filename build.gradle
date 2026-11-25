@@ -59,7 +59,7 @@ dependencies {
     // Used for the guide export
     guideExportOnly("org.bytedeco:ffmpeg-platform:${ffmpeg_version}")
 
-    implementation("org.appliedenergistics:guideme:${guideme_version}")
+    jarJar(implementation("org.appliedenergistics:guideme:${guideme_version}"))
 
     // compile against provided APIs
     compileOnly "dev.emi:emi-neoforge:${emi_version}:api"

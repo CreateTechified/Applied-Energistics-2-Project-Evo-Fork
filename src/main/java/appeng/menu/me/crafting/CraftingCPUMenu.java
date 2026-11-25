@@ -28,6 +28,7 @@ import net.minecraft.world.inventory.MenuType;
 import appeng.api.config.CpuSelectionMode;
 import appeng.api.networking.IGrid;
 import appeng.api.networking.crafting.ICraftingCPU;
+import appeng.api.networking.crafting.ICraftingCpuHost;
 import appeng.api.networking.security.IActionHost;
 import appeng.api.stacks.AEKey;
 import appeng.api.stacks.KeyCounter;
@@ -61,7 +62,7 @@ public class CraftingCPUMenu extends AEBaseMenu {
 
     private final IncrementalUpdateHelper incrementalUpdateHelper = new IncrementalUpdateHelper();
     private final IGrid grid;
-    private CraftingCPUCluster cpu = null;
+    private ICraftingCpuHost cpu = null;
     private final Consumer<AEKey> cpuChangeListener = incrementalUpdateHelper::addChange;
     private boolean cachedSuspend;
 
@@ -98,23 +99,23 @@ public class CraftingCPUMenu extends AEBaseMenu {
         }
 
         if (this.cpu != null) {
-            this.cpu.craftingLogic.removeListener(cpuChangeListener);
+            this.cpu.getCraftingLogic().removeListener(cpuChangeListener);
         }
 
         this.incrementalUpdateHelper.reset();
         this.cachedSuspend = false;
 
-        if (c instanceof CraftingCPUCluster) {
-            this.cpu = (CraftingCPUCluster) c;
+        if (c instanceof ICraftingCpuHost host) {
+            this.cpu = host;
 
             // Initially send all items as a full-update to the client when the CPU changes
             var allItems = new KeyCounter();
-            cpu.craftingLogic.getAllItems(allItems);
+            host.getCraftingLogic().getAllItems(allItems);
             for (var entry : allItems) {
                 incrementalUpdateHelper.addChange(entry.getKey());
             }
 
-            this.cpu.craftingLogic.addListener(cpuChangeListener);
+            host.getCraftingLogic().addListener(cpuChangeListener);
         } else {
             this.cpu = null;
             // Clear the crafting status
@@ -136,7 +137,7 @@ public class CraftingCPUMenu extends AEBaseMenu {
         if (isClientSide()) {
             sendClientAction(ACTION_TOGGLE_SCHEDULING);
         } else if (this.cpu != null) {
-            var logic = this.cpu.craftingLogic;
+            var logic = this.cpu.getCraftingLogic();
             logic.setJobSuspended(!logic.isJobSuspended());
         }
     }
@@ -145,7 +146,7 @@ public class CraftingCPUMenu extends AEBaseMenu {
     public void removed(Player player) {
         super.removed(player);
         if (this.cpu != null) {
-            this.cpu.craftingLogic.removeListener(cpuChangeListener);
+            this.cpu.getCraftingLogic().removeListener(cpuChangeListener);
         }
     }
 
@@ -153,11 +154,12 @@ public class CraftingCPUMenu extends AEBaseMenu {
     public void broadcastChanges() {
         if (isServerSide() && this.cpu != null) {
             this.schedulingMode = this.cpu.getSelectionMode();
-            this.cantStoreItems = this.cpu.craftingLogic.isCantStoreItems();
+            this.cantStoreItems = this.cpu.getCraftingLogic().isCantStoreItems();
 
             if (this.incrementalUpdateHelper.hasChanges()
-                    || this.cachedSuspend != this.cpu.craftingLogic.isJobSuspended()) {
-                CraftingStatus status = CraftingStatus.create(this.incrementalUpdateHelper, this.cpu.craftingLogic);
+                    || this.cachedSuspend != this.cpu.getCraftingLogic().isJobSuspended()) {
+                CraftingStatus status = CraftingStatus.create(this.incrementalUpdateHelper,
+                        this.cpu.getCraftingLogic());
                 this.incrementalUpdateHelper.commitChanges();
                 this.cachedSuspend = status.isSuspended();
 
