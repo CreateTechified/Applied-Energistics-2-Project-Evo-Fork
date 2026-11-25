@@ -77,9 +77,9 @@ jobs:
         run: |
           VERSION=$(grep '^mod_version=' gradle.properties | cut -d'=' -f2 | tr -d '[:space:]' || true)
           if [ -z "$VERSION" ]; then
-            VERSION=$(./gradlew -q printProjectVersion | tail -n 1 | tr -d '[:space:]')
+            VERSION=$(./gradlew -q printProjectVersion | tail -n 1 | sed -E 's/^.*Projectversion:[[:space:]]*//i' | tr -d '[:space:]')
           fi
-
+  
           TAG=$(git tag --points-at HEAD | head -n 1 || true)
           RELEASE_TAG="${TAG:-$VERSION}"
 
