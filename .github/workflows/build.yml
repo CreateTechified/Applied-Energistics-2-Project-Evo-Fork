@@ -75,23 +75,34 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/1.21.1'
         shell: bash
         run: |
-          VERSION=$(grep '^mod_version=' gradle.properties | cut -d'=' -f2 | tr -d '[:space:]' || true)
-          if [ -z "$VERSION" ]; then
-            VERSION=$(./gradlew -q printProjectVersion | tail -n 1 | sed -E 's/^.*Projectversion:[[:space:]]*//i' | tr -d '[:space:]')
-          fi
-  
-          TAG=$(git tag --points-at HEAD | head -n 1 || true)
-          RELEASE_TAG="${TAG:-$VERSION}"
-
-          LOWER_CHECK=$(printf '%s %s' "$VERSION" "$TAG" | tr '[:upper:]' '[:lower:]')
-          if [[ "$LOWER_CHECK" == *alpha* ]]; then
-            PRERELEASE="true"
-          else
-            PRERELEASE="false"
-          fi
-
-          echo "tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
-          echo "prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
+            # 1. Try reading mod_version directly from gradle.properties
+            RAW_VERSION=$(grep -E '^[[:space:]]*mod_version[[:space:]]*=' gradle.properties | head -n 1 | cut -d'=' -f2- | tr -d '[:space:]' || true)
+            
+            # 2. Fallback to Gradle task, extracting only the semver/version token (e.g. 19.2.21-alpha.12+1.21.1)
+            if [ -z "$RAW_VERSION" ]; then
+              RAW_VERSION=$(./gradlew -q printProjectVersion | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)*' | tail -n 1 || true)
+            fi
+            
+            # 3. Check git tag on HEAD (also strip any accidental Projectversion prefix just in case)
+            TAG=$(git tag --points-at HEAD | head -n 1 | sed -E 's/^Project[[:space:]]*version:[[:space:]]*//i' | tr -d '[:space:]' || true)
+            
+            RELEASE_TAG="${TAG:-$RAW_VERSION}"
+            
+            if [ -z "$RELEASE_TAG" ]; then
+              echo "ERROR: Could not resolve a valid release version or tag."
+              exit 1
+            fi
+            
+            LOWER_CHECK=$(printf '%s %s' "$RAW_VERSION" "$TAG" | tr '[:upper:]' '[:lower:]')
+            if [[ "$LOWER_CHECK" == *alpha* ]]; then
+              PRERELEASE="true"
+            else
+              PRERELEASE="false"
+            fi
+            
+            echo "Resolved version: '$RAW_VERSION' | tag: '$TAG' | release_tag: '$RELEASE_TAG' | prerelease: '$PRERELEASE'"
+            echo "tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         if: github.event_name == 'push' && github.ref == 'refs/heads/1.21.1'
