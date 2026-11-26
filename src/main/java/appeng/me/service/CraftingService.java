@@ -289,13 +289,19 @@ public class CraftingService implements ICraftingService, IGridServiceProvider {
             }
         }
 
-        for (var provider : this.grid.getMachines(ICraftingCpuProvider.class)) {
-            for (var cpu : provider.getExposedCpus()) {
-                this.craftingCPUClusters.add(cpu);
+        for (var machineClass : this.grid.getMachineClasses()) {
+            if (!ICraftingCpuProvider.class.isAssignableFrom(machineClass)) {
+                continue;
+            }
+            for (var machine : this.grid.getMachines(machineClass)) {
+                var provider = (ICraftingCpuProvider) machine;
+                for (var cpu : provider.getExposedCpus()) {
+                    this.craftingCPUClusters.add(cpu);
 
-                ICraftingLink maybeLink = cpu.getCraftingLogic().getLastLink();
-                if (maybeLink != null) {
-                    this.addLink((CraftingLink) maybeLink);
+                    ICraftingLink maybeLink = cpu.getCraftingLogic().getLastLink();
+                    if (maybeLink != null) {
+                        this.addLink((CraftingLink) maybeLink);
+                    }
                 }
             }
         }
