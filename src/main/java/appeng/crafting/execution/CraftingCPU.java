@@ -5,38 +5,34 @@ import org.jetbrains.annotations.Nullable;
 import net.minecraft.world.level.Level;
 
 import appeng.api.networking.IGrid;
-import appeng.api.networking.crafting.ICraftingCPU;
 import appeng.api.networking.crafting.ICraftingCpuHost;
+import appeng.api.networking.crafting.ICraftingCpuStats;
 import appeng.api.networking.security.IActionSource;
 import appeng.api.stacks.GenericStack;
 
-/**
- * Reusable {@link ICraftingCPU} implementation that owns a {@link CraftingCpuLogic} and delegates its mutable stats to
- * a backing host. Addons can wrap their own host implementation with this class instead of reimplementing the CPU.
- */
 public final class CraftingCPU implements ICraftingCpuHost {
 
-    private final ICraftingCpuHost statsHost;
+    private final ICraftingCpuStats statsHost;
     public final CraftingCpuLogic craftingLogic;
 
-    public CraftingCPU(ICraftingCpuHost statsHost) {
+    public CraftingCPU(ICraftingCpuStats statsHost) {
         this.statsHost = statsHost;
         this.craftingLogic = new CraftingCpuLogic(this);
     }
 
     @Override
     public boolean isBusy() {
-        return statsHost.isBusy();
+        return craftingLogic.hasJob();
     }
 
     @Override
     public appeng.api.networking.crafting.CraftingJobStatus getJobStatus() {
-        return statsHost.getJobStatus();
+        return craftingLogic.getJobStatus();
     }
 
     @Override
     public void cancelJob() {
-        statsHost.cancelJob();
+        craftingLogic.cancel();
     }
 
     @Override

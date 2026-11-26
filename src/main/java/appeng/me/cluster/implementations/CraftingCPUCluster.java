@@ -71,7 +71,7 @@ public final class CraftingCPUCluster implements IAECluster, ICraftingCpuHost {
     /**
      * crafting job info
      */
-    public final CraftingCpuLogic craftingLogic = new CraftingCpuLogic(this);
+    public final CraftingCpuLogic craftingLogic = new CraftingCpuLogic((ICraftingCpuHost) this);
 
     public CraftingCPUCluster(BlockPos boundsMin, BlockPos boundsMax) {
         this.boundsMin = boundsMin.immutable();
@@ -218,20 +218,7 @@ public final class CraftingCPUCluster implements IAECluster, ICraftingCpuHost {
     @Nullable
     @Override
     public CraftingJobStatus getJobStatus() {
-        var finalOutput = craftingLogic.getFinalJobOutput();
-        if (finalOutput != null) {
-            var elapsedTimeTracker = craftingLogic.getElapsedTimeTracker();
-            var progress = Math.max(
-                    0,
-                    elapsedTimeTracker.getStartItemCount() - elapsedTimeTracker.getRemainingItemCount());
-            return new CraftingJobStatus(
-                    finalOutput,
-                    elapsedTimeTracker.getStartItemCount(),
-                    progress,
-                    elapsedTimeTracker.getElapsedTime());
-        } else {
-            return null;
-        }
+        return craftingLogic.getJobStatus();
     }
 
     @Override
