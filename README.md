@@ -1,6 +1,8 @@
 
 # Applied Energistics 2 Project Evolution Fork
 
+[![logo-x3.png](https://i.postimg.cc/65GJynFV/logo-x3.png)](https://postimg.cc/ZCZDQBb0)
+
 TEMPORARY DESCRIPTION
 
 *Fun fact: This fork is exactly the 1000th fork of AE2*
