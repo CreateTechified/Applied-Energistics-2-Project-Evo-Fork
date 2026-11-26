@@ -156,7 +156,7 @@ public class CraftingCPUMenu extends AEBaseMenu {
     public void toggleScheduling() {
         if (isClientSide()) {
             sendClientAction(ACTION_TOGGLE_SCHEDULING);
-        } else if (this.cpu != null) {
+        } else if (this.cpu != null || this.providerCpu != null) {
             var logic = this.cpu != null ? this.cpu.craftingLogic : this.providerCpu.getCraftingLogic();
             logic.setJobSuspended(!logic.isJobSuspended());
         }

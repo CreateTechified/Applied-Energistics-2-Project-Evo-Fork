@@ -382,9 +382,9 @@ public class CraftingService implements ICraftingService, IGridServiceProvider {
         }
 
         CraftingCPUCluster cpuCluster;
-        if (target instanceof CraftingCPUCluster cluster) {
-            cpuCluster = cluster;
-        } else {
+        if (target instanceof CraftingCPUCluster) {
+            cpuCluster = (CraftingCPUCluster) target;
+        } else if (target == null) {
             // Provider auto-selection runs before the upstream (cluster) selection, so an AdvancedAE
             // mixin injecting right after findSuitableCraftingCPU cannot skip it.
             var providerUnsuitable = new MutableObject<UnsuitableCpus>();
@@ -393,6 +393,34 @@ public class CraftingService implements ICraftingService, IGridServiceProvider {
                 return suitableProvider.getCraftingLogic().trySubmitJob(this.grid, job, src, requestingMachine);
             }
 
+            var unsuitableCpusResult = new MutableObject<UnsuitableCpus>();
+            cpuCluster = findSuitableCraftingCPU(job, prioritizePower, src, unsuitableCpusResult);
+            if (cpuCluster == null) {
+                var clusterUnsuitable = unsuitableCpusResult.getValue();
+                var providerValue = providerUnsuitable.getValue();
+                UnsuitableCpus combined;
+                if (clusterUnsuitable == null && providerValue == null) {
+                    combined = null;
+                } else if (clusterUnsuitable == null) {
+                    combined = providerValue;
+                } else if (providerValue == null) {
+                    combined = clusterUnsuitable;
+                } else {
+                    combined = new UnsuitableCpus(
+                            clusterUnsuitable.offline() + providerValue.offline(),
+                            clusterUnsuitable.busy() + providerValue.busy(),
+                            clusterUnsuitable.tooSmall() + providerValue.tooSmall(),
+                            clusterUnsuitable.excluded() + providerValue.excluded());
+                }
+                // If no CPUs were unsuitable, but we couldn't find one, that means there aren't any
+                if (combined == null) {
+                    return CraftingSubmitResult.NO_CPU_FOUND;
+                } else {
+                    return CraftingSubmitResult.noSuitableCpu(combined);
+                }
+            }
+        } else {
+            // Fall straight through to the unchanged upstream path for any other non-cluster, non-host target.
             var unsuitableCpusResult = new MutableObject<UnsuitableCpus>();
             cpuCluster = findSuitableCraftingCPU(job, prioritizePower, src, unsuitableCpusResult);
             if (cpuCluster == null) {
