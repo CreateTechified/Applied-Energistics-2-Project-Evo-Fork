@@ -35,6 +35,7 @@ import appeng.api.config.Actionable;
 import appeng.api.config.PowerMultiplier;
 import appeng.api.features.IPlayerRegistry;
 import appeng.api.networking.IGrid;
+import appeng.api.networking.crafting.CraftingJobStatus;
 import appeng.api.networking.crafting.ICraftingCpuHost;
 import appeng.api.networking.crafting.ICraftingLink;
 import appeng.api.networking.crafting.ICraftingPlan;
@@ -51,6 +52,7 @@ import appeng.core.network.clientbound.CraftingJobStatusPacket;
 import appeng.crafting.CraftingLink;
 import appeng.crafting.inv.ListCraftingInventory;
 import appeng.hooks.ticking.TickHandler;
+import appeng.me.cluster.implementations.CraftingCPUCluster;
 import appeng.me.service.CraftingService;
 
 /**
@@ -80,6 +82,10 @@ public class CraftingCpuLogic {
 
     public CraftingCpuLogic(ICraftingCpuHost host) {
         this.host = host;
+    }
+
+    public CraftingCpuLogic(CraftingCPUCluster cluster) {
+        this((ICraftingCpuHost) cluster);
     }
 
     public ICraftingCpuHost getHost() {
@@ -420,6 +426,24 @@ public class CraftingCpuLogic {
     @Nullable
     public GenericStack getFinalJobOutput() {
         return this.job != null ? this.job.finalOutput : null;
+    }
+
+    @Nullable
+    public CraftingJobStatus getJobStatus() {
+        var finalOutput = getFinalJobOutput();
+        if (finalOutput != null) {
+            var elapsedTimeTracker = getElapsedTimeTracker();
+            var progress = Math.max(
+                    0,
+                    elapsedTimeTracker.getStartItemCount() - elapsedTimeTracker.getRemainingItemCount());
+            return new CraftingJobStatus(
+                    finalOutput,
+                    elapsedTimeTracker.getStartItemCount(),
+                    progress,
+                    elapsedTimeTracker.getElapsedTime());
+        } else {
+            return null;
+        }
     }
 
     public ElapsedTimeTracker getElapsedTimeTracker() {

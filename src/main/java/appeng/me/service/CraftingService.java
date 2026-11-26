@@ -291,13 +291,11 @@ public class CraftingService implements ICraftingService, IGridServiceProvider {
 
         for (var provider : this.grid.getMachines(ICraftingCpuProvider.class)) {
             for (var cpu : provider.getExposedCpus()) {
-                if (cpu instanceof ICraftingCpuHost host) {
-                    this.craftingCPUClusters.add(host);
+                this.craftingCPUClusters.add(cpu);
 
-                    ICraftingLink maybeLink = host.getCraftingLogic().getLastLink();
-                    if (maybeLink != null) {
-                        this.addLink((CraftingLink) maybeLink);
-                    }
+                ICraftingLink maybeLink = cpu.getCraftingLogic().getLastLink();
+                if (maybeLink != null) {
+                    this.addLink((CraftingLink) maybeLink);
                 }
             }
         }
@@ -378,14 +376,26 @@ public class CraftingService implements ICraftingService, IGridServiceProvider {
             return CraftingSubmitResult.INCOMPLETE_PLAN;
         }
 
-        ICraftingCpuHost cpuHost;
+        // Explicitly targeted provider CPU.
+        if (target instanceof ICraftingCpuHost providerHost && !(target instanceof CraftingCPUCluster)) {
+            return providerHost.getCraftingLogic().trySubmitJob(this.grid, job, src, requestingMachine);
+        }
 
-        if (target instanceof ICraftingCpuHost) {
-            cpuHost = (ICraftingCpuHost) target;
+        CraftingCPUCluster cpuCluster;
+        if (target instanceof CraftingCPUCluster cluster) {
+            cpuCluster = cluster;
         } else {
+            // Provider auto-selection runs before the upstream (cluster) selection, so an AdvancedAE
+            // mixin injecting right after findSuitableCraftingCPU cannot skip it.
+            var providerUnsuitable = new MutableObject<UnsuitableCpus>();
+            ICraftingCpuHost suitableProvider = findSuitableProviderCpu(job, prioritizePower, src, providerUnsuitable);
+            if (suitableProvider != null) {
+                return suitableProvider.getCraftingLogic().trySubmitJob(this.grid, job, src, requestingMachine);
+            }
+
             var unsuitableCpusResult = new MutableObject<UnsuitableCpus>();
-            cpuHost = findSuitableCraftingCPU(job, prioritizePower, src, unsuitableCpusResult);
-            if (cpuHost == null) {
+            cpuCluster = findSuitableCraftingCPU(job, prioritizePower, src, unsuitableCpusResult);
+            if (cpuCluster == null) {
                 var unsuitableCpus = unsuitableCpusResult.getValue();
                 // If no CPUs were unsuitable, but we couldn't find one, that means there aren't any
                 if (unsuitableCpus == null) {
@@ -396,18 +406,43 @@ public class CraftingService implements ICraftingService, IGridServiceProvider {
             }
         }
 
-        return cpuHost.getCraftingLogic().trySubmitJob(this.grid, job, src, requestingMachine);
+        return cpuCluster.submitJob(this.grid, job, src, requestingMachine);
     }
 
     @Nullable
-    private ICraftingCpuHost findSuitableCraftingCPU(ICraftingPlan job, boolean prioritizePower, IActionSource src,
+    private CraftingCPUCluster findSuitableCraftingCPU(ICraftingPlan job, boolean prioritizePower, IActionSource src,
             MutableObject<UnsuitableCpus> unsuitableCpus) {
-        var validCpusClusters = new ArrayList<ICraftingCpuHost>(this.craftingCPUClusters.size());
+        var clusters = new ArrayList<CraftingCPUCluster>();
+        for (var cpu : this.craftingCPUClusters) {
+            if (cpu instanceof CraftingCPUCluster cluster) {
+                clusters.add(cluster);
+            }
+        }
+        ICraftingCpuHost result = selectSuitableCpu(clusters, job, prioritizePower, src, unsuitableCpus);
+        return result instanceof CraftingCPUCluster cluster ? cluster : null;
+    }
+
+    @Nullable
+    private ICraftingCpuHost findSuitableProviderCpu(ICraftingPlan job, boolean prioritizePower, IActionSource src,
+            MutableObject<UnsuitableCpus> unsuitableCpus) {
+        var providers = new ArrayList<ICraftingCpuHost>();
+        for (var cpu : this.craftingCPUClusters) {
+            if (!(cpu instanceof CraftingCPUCluster)) {
+                providers.add(cpu);
+            }
+        }
+        return selectSuitableCpu(providers, job, prioritizePower, src, unsuitableCpus);
+    }
+
+    @Nullable
+    private ICraftingCpuHost selectSuitableCpu(Iterable<? extends ICraftingCpuHost> candidates, ICraftingPlan job,
+            boolean prioritizePower, IActionSource src, MutableObject<UnsuitableCpus> unsuitableCpus) {
+        var validCpus = new ArrayList<ICraftingCpuHost>();
         int offline = 0;
         int busy = 0;
         int tooSmall = 0;
         int excluded = 0;
-        for (var cpu : this.craftingCPUClusters) {
+        for (var cpu : candidates) {
             if (!cpu.isActive()) {
                 offline++;
                 continue;
@@ -424,17 +459,17 @@ public class CraftingService implements ICraftingService, IGridServiceProvider {
                 excluded++;
                 continue;
             }
-            validCpusClusters.add(cpu);
+            validCpus.add(cpu);
         }
 
-        if (validCpusClusters.isEmpty()) {
+        if (validCpus.isEmpty()) {
             if (offline > 0 || busy > 0 || tooSmall > 0 || excluded > 0) {
                 unsuitableCpus.setValue(new UnsuitableCpus(offline, busy, tooSmall, excluded));
             }
             return null;
         }
 
-        validCpusClusters.sort((a, b) -> {
+        validCpus.sort((a, b) -> {
             // Prioritize sorting by selected mode
             var firstPreferred = a.isPreferredFor(src);
             var secondPreferred = b.isPreferredFor(src);
@@ -450,7 +485,7 @@ public class CraftingService implements ICraftingService, IGridServiceProvider {
             }
         });
 
-        return validCpusClusters.get(0);
+        return validCpus.get(0);
     }
 
     @Override

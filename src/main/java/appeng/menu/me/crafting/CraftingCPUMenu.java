@@ -62,7 +62,8 @@ public class CraftingCPUMenu extends AEBaseMenu {
 
     private final IncrementalUpdateHelper incrementalUpdateHelper = new IncrementalUpdateHelper();
     private final IGrid grid;
-    private ICraftingCpuHost cpu = null;
+    private CraftingCPUCluster cpu = null;
+    private ICraftingCpuHost providerCpu = null;
     private final Consumer<AEKey> cpuChangeListener = incrementalUpdateHelper::addChange;
     private boolean cachedSuspend;
 
@@ -99,16 +100,31 @@ public class CraftingCPUMenu extends AEBaseMenu {
         }
 
         if (this.cpu != null) {
-            this.cpu.getCraftingLogic().removeListener(cpuChangeListener);
+            this.cpu.craftingLogic.removeListener(cpuChangeListener);
+        }
+        if (this.providerCpu != null) {
+            this.providerCpu.getCraftingLogic().removeListener(cpuChangeListener);
         }
 
         this.incrementalUpdateHelper.reset();
         this.cachedSuspend = false;
 
-        if (c instanceof ICraftingCpuHost host) {
-            this.cpu = host;
+        if (c instanceof CraftingCPUCluster) {
+            this.providerCpu = null;
+            this.cpu = (CraftingCPUCluster) c;
 
             // Initially send all items as a full-update to the client when the CPU changes
+            var allItems = new KeyCounter();
+            cpu.craftingLogic.getAllItems(allItems);
+            for (var entry : allItems) {
+                incrementalUpdateHelper.addChange(entry.getKey());
+            }
+
+            this.cpu.craftingLogic.addListener(cpuChangeListener);
+        } else if (c instanceof ICraftingCpuHost host) {
+            this.cpu = null;
+            this.providerCpu = host;
+
             var allItems = new KeyCounter();
             host.getCraftingLogic().getAllItems(allItems);
             for (var entry : allItems) {
@@ -118,6 +134,7 @@ public class CraftingCPUMenu extends AEBaseMenu {
             host.getCraftingLogic().addListener(cpuChangeListener);
         } else {
             this.cpu = null;
+            this.providerCpu = null;
             // Clear the crafting status
             sendPacketToClient(new CraftingStatusPacket(containerId, CraftingStatus.EMPTY));
         }
@@ -130,6 +147,9 @@ public class CraftingCPUMenu extends AEBaseMenu {
             if (this.cpu != null) {
                 this.cpu.cancelJob();
             }
+            if (this.providerCpu != null) {
+                this.providerCpu.cancelJob();
+            }
         }
     }
 
@@ -137,7 +157,7 @@ public class CraftingCPUMenu extends AEBaseMenu {
         if (isClientSide()) {
             sendClientAction(ACTION_TOGGLE_SCHEDULING);
         } else if (this.cpu != null) {
-            var logic = this.cpu.getCraftingLogic();
+            var logic = this.cpu != null ? this.cpu.craftingLogic : this.providerCpu.getCraftingLogic();
             logic.setJobSuspended(!logic.isJobSuspended());
         }
     }
@@ -146,24 +166,30 @@ public class CraftingCPUMenu extends AEBaseMenu {
     public void removed(Player player) {
         super.removed(player);
         if (this.cpu != null) {
-            this.cpu.getCraftingLogic().removeListener(cpuChangeListener);
+            this.cpu.craftingLogic.removeListener(cpuChangeListener);
+        }
+        if (this.providerCpu != null) {
+            this.providerCpu.getCraftingLogic().removeListener(cpuChangeListener);
         }
     }
 
     @Override
     public void broadcastChanges() {
-        if (isServerSide() && this.cpu != null) {
-            this.schedulingMode = this.cpu.getSelectionMode();
-            this.cantStoreItems = this.cpu.getCraftingLogic().isCantStoreItems();
+        if (isServerSide()) {
+            ICraftingCpuHost active = this.cpu != null ? this.cpu : this.providerCpu;
+            if (active != null) {
+                this.schedulingMode = active.getSelectionMode();
+                this.cantStoreItems = active.getCraftingLogic().isCantStoreItems();
 
-            if (this.incrementalUpdateHelper.hasChanges()
-                    || this.cachedSuspend != this.cpu.getCraftingLogic().isJobSuspended()) {
-                CraftingStatus status = CraftingStatus.create(this.incrementalUpdateHelper,
-                        this.cpu.getCraftingLogic());
-                this.incrementalUpdateHelper.commitChanges();
-                this.cachedSuspend = status.isSuspended();
+                if (this.incrementalUpdateHelper.hasChanges()
+                        || this.cachedSuspend != active.getCraftingLogic().isJobSuspended()) {
+                    CraftingStatus status = CraftingStatus.create(this.incrementalUpdateHelper,
+                            active.getCraftingLogic());
+                    this.incrementalUpdateHelper.commitChanges();
+                    this.cachedSuspend = status.isSuspended();
 
-                sendPacketToClient(new CraftingStatusPacket(containerId, status));
+                    sendPacketToClient(new CraftingStatusPacket(containerId, status));
+                }
             }
         }
 
